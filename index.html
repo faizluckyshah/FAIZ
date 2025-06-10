@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>KEL Stock Simulation</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+      color: #333;
+    }
+    h1 {
+      color: #006400;
+    }
+    #result {
+      font-size: 1.2em;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Profit/Loss Simulation for KEL</h1>
+  <div id="result">Loading...</div>
+
+  <script>
+    async function fetchAndSimulate() {
+      const url = 'https://www.khistocks.com/company/getintra/KEL';
+      const cashStart = 100000;
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        data.forEach(entry => {
+          entry.parsed_time = new Date(`1970-01-01T${entry.last_trade_time}Z`);
+          entry.last_trade_price = parseFloat(entry.last_trade_price);
+        });
+
+        // Group by 5-minute buckets
+        const buckets = {};
+        for (let entry of data) {
+          const t = entry.parsed_time;
+          const bucketMinute = Math.floor(t.getUTCMinutes() / 5) * 5;
+          const bucketKey = `${t.getUTCHours().toString().padStart(2, '0')}:${bucketMinute.toString().padStart(2, '0')}`;
+          if (!buckets[bucketKey]) buckets[bucketKey] = [];
+          buckets[bucketKey].push(entry);
+        }
+
+        // Convert to OHLC
+        const aggregated = [];
+        for (let time in buckets) {
+          const sorted = buckets[time].sort((a, b) => a.parsed_time - b.parsed_time);
+          const prices = sorted.map(e => e.last_trade_price);
+          aggregated.push({
+            time: time,
+            open: prices[0],
+            high: Math.max(...prices),
+            low: Math.min(...prices),
+            close: prices[prices.length - 1]
+          });
+        }
+
+        // Trading simulation
+        let cash = cashStart;
+        let shares = 0;
+        let benchmarkHigh = null;
+        let benchmarkLow = null;
+        let holding = false;
+        let netLoss = 0;
+
+        for (let candle of aggregated) {
+          const { open, high, low, close } = candle;
+
+          if (!holding) {
+            if (benchmarkHigh === null && close > open) {
+              benchmarkHigh = high;
+              benchmarkLow = low;
+              shares = cash / close;
+              cash = 0;
+              holding = true;
+            } else if (benchmarkHigh !== null && close > benchmarkHigh) {
+              shares = cash / close;
+              cash = 0;
+              holding = true;
+            }
+          } else {
+            if (low <= benchmarkLow) {
+              const sellPrice = benchmarkLow;
+              cash = shares * sellPrice;
+              const realizedLoss = cashStart - cash;
+              netLoss += realizedLoss;
+              shares = 0;
+              holding = false;
+            }
+          }
+        }
+
+        let totalPnL = 0;
+        if (holding) {
+          totalPnL = shares * aggregated[aggregated.length - 1].close - cashStart - netLoss;
+        } else {
+          totalPnL = cash - cashStart - netLoss;
+        }
+
+        document.getElementById('result').innerText =
+          `Final Net Profit/Loss for KEL: ${totalPnL.toFixed(2)} PKR`;
+
+      } catch (err) {
+        document.getElementById('result').innerText = 'Error fetching or processing data.';
+        console.error(err);
+      }
+    }
+
+    fetchAndSimulate();
+  </script>
+</body>
+</html>
